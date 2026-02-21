@@ -1,70 +1,73 @@
 import streamlit as st
-from supabase import create_client
+from supabase import create_client, Client
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-# ---------------- SUPABASE CONFIG ----------------
-url = "https://btywlttteyipgtpiyifa.supabase.co"  # Replace with YOUR project URL
-key = "sb_publishable_KgSA8z2DpoteCNPfG-sIlw_A_-kRyqy"              # Replace with YOUR key
-supabase = create_client(url, key)
+# ---------------- Supabase Setup ----------------
+url = "https://btywlttteyipgtpiyifa.supabase.co"
+key = "sb_publishable_KgSA8z2DpoteCNPfG-sIlw_A_-kRyqy"
+supabase: Client = create_client(url, key)
 
-# ---------------- PAGE SETTINGS ----------------
-st.set_page_config(page_title="Personal Note", layout="centered")
-st.title("Personal Note 📝")
+# ---------------- Streamlit UI ----------------
+st.set_page_config(page_title="💬 Secret Chat", page_icon="🔐")
+st.title("💬 Secret Chat")
+st_autorefresh(interval=2000, key="refresh")  # real-time update
 
-# ---------------- AUTO REFRESH ----------------
-st_autorefresh(interval=2000)
-
-# ---------------- PASSWORD PROTECTION ----------------
-PASSWORD = "n+a"
-
+# ---------------- Password ----------------
 if "unlocked" not in st.session_state:
     st.session_state.unlocked = False
 
-if not st.session_state.unlocked:
-    pwd = st.text_input("Enter password", type="password")
-    if pwd == PASSWORD:
+password = st.text_input("Enter password:", type="password")
+if st.button("Unlock"):
+    if password == "n+a":  # example password
         st.session_state.unlocked = True
-        st.success("Vault unlocked! Remembered for this session.")
+        st.success("Unlocked ✅")
     else:
-        st.stop()
+        st.error("Wrong password ❌")
 
-# ---------------- ROOM / NOTEBOOK ----------------
-room = st.text_input("Notebook name", "personal")
-if not room:
+if not st.session_state.unlocked:
     st.stop()
 
-st.divider()
+# ---------------- Chat Room ----------------
+chat_id = st.text_input("Enter chat ID (share with your friend):")
+if not chat_id:
+    st.info("Enter a chat ID to start chatting")
+    st.stop()
 
-# ---------------- WRITE NOTE ----------------
-note = st.text_area("Write note")
-if st.button("Save"):
-    if note:
-        supabase.table("vault").insert({
-            "room": room,
-            "content": note,
-            "created_at": str(datetime.utcnow())
-        }).execute()
-        st.success("Saved")
+# ---------------- Message Input ----------------
+message = st.chat_input("Type your message...")
+if message:
+    supabase.table("messages").insert({
+        "chat_id": chat_id,
+        "text": message,
+        "created_at": datetime.utcnow(),
+        "sender": "me",
+        "seen_at": None
+    }).execute()
 
-# ---------------- VIEW ONCE ----------------
-if "viewed_messages" not in st.session_state:
-    st.session_state.viewed_messages = {}
+# ---------------- Display Messages ----------------
+now = datetime.utcnow()
+msgs = supabase.table("messages").select("*").eq("chat_id", chat_id).order("created_at").execute().data
+to_delete = []
 
-if st.button("👁️ View messages"):
-    data = supabase.table("vault").select("*").eq("room", room).order("created_at").execute()
-    now = datetime.utcnow()
-    for n in data.data:
-        st.write("• " + n["content"])
-        st.session_state.viewed_messages[n["id"]] = now + timedelta(minutes=5)
+for msg in msgs:
+    # Auto-delete if viewed >5 min
+    if msg.get("seen_at") and (now - msg["seen_at"]).total_seconds() > 300:
+        to_delete.append(msg["id"])
+        continue
+    
+    with st.chat_message("Friend" if msg["sender"] != "me" else "You"):
+        st.write(msg["text"])
+    
+    # Mark as seen
+    if not msg.get("seen_at"):
+        supabase.table("messages").update({"seen_at": datetime.utcnow()}).eq("id", msg["id"]).execute()
 
-# Auto-delete messages 5 minutes after viewing
-for msg_id, delete_time in list(st.session_state.viewed_messages.items()):
-    if datetime.utcnow() >= delete_time:
-        supabase.table("vault").delete().eq("id", msg_id).execute()
-        del st.session_state.viewed_messages[msg_id]
+# Delete old messages
+for msg_id in to_delete:
+    supabase.table("messages").delete().eq("id", msg_id).execute()
 
-# ---------------- CLEAR ALL ----------------
-if st.button("🧹 Clear all"):
-    supabase.table("vault").delete().eq("room", room).execute()
-    st.warning("All notes deleted")
+# ---------------- Clear All ----------------
+if st.button("🧹 Clear All Messages"):
+    supabase.table("messages").delete().eq("chat_id", chat_id).execute()
+    st.success("All messages cleared ✅")
