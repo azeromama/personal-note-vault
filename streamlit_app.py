@@ -2,7 +2,6 @@ import streamlit as st
 from supabase import create_client
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
-import streamlit.components.v1 as components
 
 # --- SUPABASE CONFIG ---
 url = "https://btywlttteyipgtpiyifa.supabase.co"
@@ -10,51 +9,28 @@ key = "sb_publishable_KgSA8z2DpoteCNPfG-sIlw_A_-kRyqy"
 supabase = create_client(url, key)
 
 st.set_page_config(page_title="Personal Note", layout="centered")
+st.title("Personal Note 📝")
 
-# --- AUTO REFRESH EVERY 2s ---
+# --- AUTO REFRESH REAL-TIME ---
 st_autorefresh(interval=2000)
 
-# --- HIDDEN UNLOCK USING LOCAL STORAGE ---
+# --- PASSWORD PROTECTION ---
+PASSWORD = "n+a"
+
 if "unlocked" not in st.session_state:
     st.session_state.unlocked = False
-if "tap" not in st.session_state:
-    st.session_state.tap = 0
 
-# Display title as "Personal Note"
-components.html("""
-<h1 id="title" style="cursor:pointer;">Personal Note</h1>
-<script>
-let tap = 0;
-document.getElementById('title').addEventListener('click', function() {
-    tap += 1;
-    if (tap >= 3){
-        localStorage.setItem('vault_unlocked','true');
-        location.reload();
-    }
-});
-</script>
-""", height=50)
-
-# Check local storage for unlock
-components.html("""
-<script>
-if(localStorage.getItem('vault_unlocked') === 'true'){
-    document.dispatchEvent(new Event('vaultUnlocked'));
-}
-</script>
-""", height=0)
-
-# Use st.session_state to remember unlock
+# If not unlocked, show password input
 if not st.session_state.unlocked:
-    if 'vault_unlocked' not in st.session_state:
+    pwd = st.text_input("Enter password", type="password")
+    if pwd == PASSWORD:
+        st.session_state.unlocked = True
+        st.success("Unlocked! Remembered for this session.")
+    else:
         st.stop()
-    st.session_state.unlocked = True
 
-st.success("Vault unlocked")
-
-# --- ROOM ---
+# --- ROOM / NOTEBOOK ---
 room = st.text_input("Notebook name", "personal")
-
 if not room:
     st.stop()
 
@@ -72,25 +48,23 @@ if st.button("Save"):
         }).execute()
         st.success("Saved")
 
-# --- VIEW ONE-TIME MESSAGES ---
-if st.button("👁️ View messages"):
-    data = supabase.table("vault") \
-        .select("*") \
-        .eq("room", room) \
-        .order("created_at") \
-        .execute()
+# --- VIEW MESSAGES (One-time, auto-delete after 5 minutes) ---
+if "viewed_messages" not in st.session_state:
+    st.session_state.viewed_messages = {}
 
-    # Show messages
+if st.button("👁️ View messages"):
+    data = supabase.table("vault").select("*").eq("room", room).order("created_at").execute()
+    now = datetime.utcnow()
     for n in data.data:
         st.write("• " + n["content"])
-
-    # Auto-delete 2 minutes after viewing
-    if data.data:
-        delete_time = datetime.utcnow() + timedelta(minutes=2)
-        for n in data.data:
-            supabase.table("vault").update({"created_at": delete_time}).eq("id", n["id"]).execute()
-        # Streamlit won't auto-delete, so messages will vanish after 2 minutes in DB
-        st.info("Messages will auto-delete in 2 minutes 💣")
+        # Save deletion time (5 minutes later)
+        st.session_state.viewed_messages[n["id"]] = now + timedelta(minutes=5)
+    
+# Auto-delete messages 5 minutes after viewing
+for msg_id, delete_time in list(st.session_state.viewed_messages.items()):
+    if datetime.utcnow() >= delete_time:
+        supabase.table("vault").delete().eq("id", msg_id).execute()
+        del st.session_state.viewed_messages[msg_id]
 
 # --- CLEAR ALL ---
 if st.button("🧹 Clear all"):
